@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Xendit\Configuration;
 use Xendit\Invoice\CreateInvoiceRequest;
 use Xendit\Invoice\InvoiceApi;
@@ -21,7 +22,9 @@ class OrderController extends Controller
 
     public function index()
     {
-        return view('order');
+        return view('order', [
+            'order' => Order::latest()->get()
+        ]);
     }
 
     public function createInvoice(Request $request)
@@ -69,8 +72,68 @@ class OrderController extends Controller
              */
             $order->invoice_url = $generateInvoice['invoice_url'];
             $order->save();
-            return dd($order);
+            return to_route('home');
+        } catch (\Throwable $th) {
+            throw $th;
+        }
+    }
 
+    public function notificationCallback(Request $request)
+    {
+        /**
+         * Mendapatkan token xendit dari webhooks
+         */
+        $getToken = $request->headers->get('x-callback-token');
+
+        /**
+         * Mengabil nilai token yang ditambahakan pada file .env
+         */
+        $callbackToken = env('XENDIT_CALLBACK_TOKEN');
+
+        try {
+            $order = Order::where('external_id', $request->external_id)->first();
+
+            /**
+             * Kondisi jika nilai callback token kosong pada file .env
+             */
+            if (!$callbackToken) {
+                return response()->json([
+                    'status' => 'Error',
+                    'message' => 'Callback token xendit not exists'
+                ], Response::HTTP_NOT_FOUND);
+            }
+
+            /**
+             * Kondisi jika nilai token yang didapatkan tidak sama dengan
+             * nilai token yang dimuat pada file .env
+             */
+            if ($getToken !== $callbackToken) {
+                return response()->json([
+                    'status' => 'Error',
+                    'message' => 'Token callback invalid'
+                ], Response::HTTP_INTERNAL_SERVER_ERROR);
+            }
+
+            /**
+             * Jika responses status bernilai PAID
+             * ubah status pembayaran pada tabel orders
+             */
+            if ($order) {
+                if ($request->status === 'PAID') {
+                    $order->update([
+                        'status' => 'Completed'
+                    ]);
+                } else {
+                    $order->update([
+                        'status' => 'Failed'
+                    ]);
+                }
+            }
+
+            return response()->json([
+                'status' => Response::HTTP_OK,
+                'message' => 'callback sent'
+            ]);
         } catch (\Throwable $th) {
             throw $th;
         }
